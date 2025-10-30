@@ -1,23 +1,45 @@
 import config from "@/config";
-import jwt from "jsonwebtoken";
-import bcrypt from "bcrypt";
-import { User } from "@/models/v1/model";
+import { User } from "@/models/User";
 import { Request, Response } from "express";
 import TryCatch from "@/lib/TryCatch.js";
+import { generateAccessToken, generateRefreshToken } from "@/lib/jwt";
+import Token from "@/models/token";
 
-const login = TryCatch(async (req: Request, res: Response) => {
+const login = TryCatch(async (req: Request, res: Response): Promise<void> => {
   const { email, password } = req.body;
-  const user = await User.findOne({ email });
+  if (!email || !password) {
+    res.status(400).json({ message: "Email and password are required" });
+    return;
+  }
+
+  const user = await User.findOne({ email })
+    .select("username email password role")
+    .lean()
+    .exec();
+
   if (!user) {
-    return res.status(400).json({ message: "Invalid credentials" });
+    res.status(401).json({ message: "Invalid email or password" });
+    return;
   }
-  const isPasswordValid = await bcrypt.compare(password, user.password);
-  if (!isPasswordValid) {
-    return res.status(400).json({ message: "Invalid credentials" });
-  }
-  const accessToken = jwt.sign({ userId: user._id }, config.JWT_ACCESS_SECRET, {
-    expiresIn: config.ACCESS_TOKEN_EXPIRY,
+
+  const accessToken = generateAccessToken(user._id);
+  const refreshToken = generateRefreshToken(user._id);
+
+  await Token.create({ token: refreshToken, userId: user._id });
+
+  res.cookie("refreshToken", refreshToken, {
+    httpOnly: true,
+    secure: config.NODE_ENV === "production",
+    sameSite: "strict",
   });
-  res.status(200).json({ accessToken });
+
+  res.status(200).json({
+    user: {
+      email: user.email,
+      role: user.role,
+    },
+    accessToken,
+  });
 });
+
 export default login;
